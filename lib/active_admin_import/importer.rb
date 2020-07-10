@@ -3,7 +3,7 @@ require 'csv'
 module ActiveAdminImport
   class Importer
     attr_reader :resource, :options, :result, :model
-    attr_accessor :csv_lines, :headers
+    attr_accessor :csv_lines, :headers, :history_csv_lines, :history_headers
 
     OPTIONS = [
       :validate,
@@ -24,7 +24,7 @@ module ActiveAdminImport
     def initialize(resource, model, options)
       @resource = resource
       @model = model
-      @headers = model.respond_to?(:csv_headers) ? model.csv_headers : []
+      @headers = model.respond_to?(:csv_headers) ? model.csv_headers : []  
       assign_options(options)
     end
 
@@ -36,8 +36,9 @@ module ActiveAdminImport
       @model.file
     end
 
-    def cycle(lines)
-      @csv_lines = CSV.parse(lines.join, @csv_options)
+    def cycle(lines) 
+      @csv_lines = CSV.parse(lines.join, @csv_options) 
+      @history_csv_lines = CSV.parse(lines.join, @csv_options) 
       import_result.add(batch_import, lines.count)
     end
 
@@ -61,14 +62,25 @@ module ActiveAdminImport
       )
     end
 
-    def batch_replace(header_key, options)
+    def batch_replace(header_key, options) 
+      batch_replace_history(header_key, options)
       index = header_index(header_key)
       csv_lines.map! do |line|
-        from = line[index]
+        from = line[index]&.downcase&.lstrip&.rstrip
         line[index] = options[from] if options.key?(from)
         line
-      end
+      end 
     end
+
+    def batch_replace_history(header_key, options)
+      history_index = history_header_index(header_key)
+      history_csv_lines.map! do |line|
+        from = line[history_index]&.downcase&.lstrip&.rstrip
+        line[history_index] = options[from] if options.key?(from)
+        line
+      end 
+    end
+
 
     # Use this method when CSV file contains unnecessary columns
     #
@@ -86,7 +98,7 @@ module ActiveAdminImport
       unless defined?(@use_indexes)
         @use_indexes = []
         headers.values.each_with_index do |val, index|
-          @use_indexes << index if val.in?(slice_columns)
+          @use_indexes << index if val.to_s.in?(slice_columns)
         end
         return csv_lines if @use_indexes.empty?
 
@@ -97,15 +109,23 @@ module ActiveAdminImport
       # slice CSV values
       csv_lines.map! do |line|
         line.values_at(*@use_indexes)
-      end
+      end 
     end
 
-    def values_at(header_key)
-      csv_lines.collect { |line| line[header_index(header_key)] }.uniq
+    def values_at(header_key, history = false)
+      if history
+          history_csv_lines.collect { |line| history_header_index(header_key)? line[history_header_index(header_key)] : "" } 
+      else
+          csv_lines.collect { |line|  header_index(header_key)? line[header_index(header_key)] : ""  } 
+      end
     end
 
     def header_index(header_key)
       headers.values.index(header_key)
+    end
+
+    def history_header_index(header_key)
+      history_headers.values.index(header_key)
     end
 
     protected
@@ -113,7 +133,7 @@ module ActiveAdminImport
     def process_file
       lines = []
       batch_size = options[:batch_size].to_i
-      File.open(file.path) do |f|
+      File.open(file.path, "r:UTF-8") do |f|
         # capture headers if not exist
         prepare_headers { CSV.parse(f.readline, @csv_options).first }
         f.each_line do |line|
@@ -131,7 +151,8 @@ module ActiveAdminImport
       headers = self.headers.present? ? self.headers.map(&:to_s) : yield
       @headers = Hash[headers.zip(headers.map { |el| el.underscore.gsub(/\s+/, '_') })].with_indifferent_access
       @headers.merge!(options[:headers_rewrites].symbolize_keys.slice(*@headers.symbolize_keys.keys))
-      @headers
+      @headers  
+      @history_headers = self.headers
     end
 
     def run_callback(name)
